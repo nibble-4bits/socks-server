@@ -1,6 +1,5 @@
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
 // +----+----------+----------+
@@ -64,63 +63,10 @@ impl SocksServer {
             dbg!(&client_request);
 
             let remote_conn = self.send_server_reply(&mut client_conn, client_request);
-            client_conn.set_nonblocking(true).unwrap();
-            remote_conn.set_nonblocking(true).unwrap();
 
-            let client_conn_arc = Arc::new(Mutex::new(client_conn));
-            let client_conn_1 = Arc::clone(&client_conn_arc);
-            let client_conn_2 = Arc::clone(&client_conn_arc);
-
-            let remote_conn_arc = Arc::new(Mutex::new(remote_conn));
-            let remote_conn_1 = Arc::clone(&remote_conn_arc);
-            let remote_conn_2 = Arc::clone(&remote_conn_arc);
-
-            let client_to_remote = thread::spawn(move || loop {
-                let mut buf = [0; 65535];
-                let n;
-                {
-                    n = match client_conn_1.lock().unwrap().read(&mut buf) {
-                        Ok(s) => s,
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            continue;
-                        }
-                        Err(e) => panic!("encountered IO error: {e}"),
-                    }
-                }
-
-                if n == 0 {
-                    break;
-                }
-
-                {
-                    remote_conn_1.lock().unwrap().write_all(&buf[..n]).unwrap();
-                }
+            thread::spawn(|| {
+                handle_packet_relay(client_conn, remote_conn);
             });
-
-            let remote_to_client = thread::spawn(move || loop {
-                let mut buf = [0; 65535];
-                let n;
-                {
-                    n = match remote_conn_2.lock().unwrap().read(&mut buf) {
-                        Ok(s) => s,
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            continue;
-                        }
-                        Err(e) => panic!("encountered IO error: {e}"),
-                    }
-                }
-
-                if n == 0 {
-                    break;
-                }
-
-                {
-                    client_conn_2.lock().unwrap().write_all(&buf[..n]).unwrap();
-                }
-            });
-
-            client_to_remote.join().unwrap();
-            remote_to_client.join().unwrap();
         }
     }
 
@@ -227,6 +173,45 @@ impl SocksServer {
 
         remote_conn
     }
+}
+
+fn handle_packet_relay(mut client_conn: TcpStream, mut remote_conn: TcpStream) {
+    let mut client_conn_2 = client_conn.try_clone().unwrap();
+    let mut remote_conn_2 = remote_conn.try_clone().unwrap();
+
+    let client_to_remote = thread::spawn(move || loop {
+        let mut buf = [0; 65535];
+        let n = match client_conn.read(&mut buf) {
+            Ok(s) => s,
+            Err(e) => panic!("encountered IO error: {e}"),
+        };
+
+        if n == 0 {
+            break;
+        }
+
+        remote_conn.write_all(&buf[..n]).unwrap();
+    });
+
+    let remote_to_client = thread::spawn(move || loop {
+        let mut buf = [0; 65535];
+        let n = match remote_conn_2.read(&mut buf) {
+            Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                continue;
+            }
+            Err(e) => panic!("encountered IO error: {e}"),
+        };
+
+        if n == 0 {
+            break;
+        }
+
+        client_conn_2.write_all(&buf[..n]).unwrap();
+    });
+
+    client_to_remote.join().unwrap();
+    remote_to_client.join().unwrap();
 }
 
 impl Default for SocksServer {
