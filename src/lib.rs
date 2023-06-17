@@ -1,6 +1,14 @@
+use num_derive::{FromPrimitive, ToPrimitive};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::{process, thread};
+
+#[derive(Debug, FromPrimitive, ToPrimitive)]
+enum AuthMethod {
+    NoAuth,
+    Gssapi,
+    UserPassword,
+}
 
 // +----+----------+----------+
 // |VER | NMETHODS | METHODS  |
@@ -11,7 +19,7 @@ use std::{process, thread};
 struct ClientHello {
     version: u8,
     n_methods: u8,
-    methods: Vec<u8>,
+    methods: Vec<AuthMethod>,
 }
 
 // enum AddressType {
@@ -72,18 +80,24 @@ impl SocksServer {
 
     fn read_client_hello(&self, stream: &mut TcpStream) -> ClientHello {
         let mut buf = [0; 2];
-
         stream.read_exact(&mut buf).unwrap();
 
         let [version, n_methods] = buf;
 
-        let mut buf = vec![0; n_methods as usize];
-        stream.read_exact(&mut buf).unwrap();
+        let mut methods_buf = vec![0; n_methods as usize];
+        stream.read_exact(&mut methods_buf).unwrap();
+
+        let mut methods = Vec::with_capacity(n_methods as usize);
+        for method in methods_buf {
+            if let Some(method) = num_traits::FromPrimitive::from_u8(method) {
+                methods.push(method);
+            }
+        }
 
         ClientHello {
             version,
             n_methods,
-            methods: buf,
+            methods,
         }
     }
 
