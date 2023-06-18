@@ -1,6 +1,6 @@
 use num_derive::{FromPrimitive, ToPrimitive};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 use std::{process, thread};
 
 #[derive(Debug, FromPrimitive, ToPrimitive)]
@@ -22,11 +22,19 @@ struct ClientHello {
     methods: Vec<AuthMethod>,
 }
 
-// enum AddressType {
-//     Ipv4 = 1,
-//     Ipv6 = 3,
-//     DomainName = 4,
-// }
+#[derive(Debug, FromPrimitive, ToPrimitive)]
+enum AddressType {
+    Ipv4 = 1,
+    DomainName = 3,
+    Ipv6 = 4,
+}
+
+#[derive(Debug)]
+enum DestinationAddress {
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+    DomainName(String),
+}
 
 // +----+-----+-------+------+----------+----------+
 // |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -38,8 +46,8 @@ struct ClientRequest {
     version: u8,
     command: u8,
     reserved: u8,
-    address_type: u8,
-    destination_addr: Vec<u8>,
+    address_type: AddressType,
+    destination_addr: DestinationAddress,
     destination_port: u16,
 }
 
@@ -64,6 +72,9 @@ impl SocksServer {
             println!("Accepted connection from {}", remote);
 
             let client_hello = self.read_client_hello(&mut client_conn);
+
+            dbg!(&client_hello);
+
             self.send_server_hello(&mut client_conn, client_hello);
 
             let client_request = self.read_client_request(&mut client_conn);
@@ -103,31 +114,39 @@ impl SocksServer {
 
     fn read_client_request(&self, stream: &mut TcpStream) -> ClientRequest {
         let mut buf = [0; 4];
-
         stream.read_exact(&mut buf).unwrap();
 
         let [version, command, reserved, address_type] = buf;
 
-        let mut destination_addr;
-        match address_type {
-            1 => {
-                destination_addr = vec![0; 4];
-                stream.read_exact(&mut destination_addr).unwrap();
+        let address_type = if let Some(addr_type) = num_traits::FromPrimitive::from_u8(address_type)
+        {
+            addr_type
+        } else {
+            eprintln!("Unrecognized address type {address_type}");
+            process::exit(1);
+        };
+
+        let destination_addr = match address_type {
+            AddressType::Ipv4 => {
+                let mut octets = [0; 4];
+                stream.read_exact(&mut octets).unwrap();
+
+                DestinationAddress::Ipv4(Ipv4Addr::from(octets))
             }
-            3 => {
+            AddressType::Ipv6 => {
+                let mut octets = [0; 16];
+                stream.read_exact(&mut octets).unwrap();
+
+                DestinationAddress::Ipv6(Ipv6Addr::from(octets))
+            }
+            AddressType::DomainName => {
                 let mut domain_name_len = [0];
                 stream.read_exact(&mut domain_name_len).unwrap();
 
-                destination_addr = vec![0; domain_name_len[0] as usize];
-                stream.read_exact(&mut destination_addr).unwrap();
-            }
-            4 => {
-                destination_addr = vec![0; 6];
-                stream.read_exact(&mut destination_addr).unwrap();
-            }
-            _ => {
-                eprintln!("Unrecognized address type {address_type}");
-                process::exit(1);
+                let mut domain = vec![0; domain_name_len[0] as usize];
+                stream.read_exact(&mut domain).unwrap();
+
+                DestinationAddress::DomainName(String::from_utf8(domain).unwrap())
             }
         };
 
@@ -159,29 +178,37 @@ impl SocksServer {
         // +----+-----+-------+------+----------+----------+
         // | 1  |  1  | X'00' |  1   | Variable |    2     |
         // +----+-----+-------+------+----------+----------+
-        let remote_addr = SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(
-                client_request.destination_addr[0],
-                client_request.destination_addr[1],
-                client_request.destination_addr[2],
-                client_request.destination_addr[3],
-            )),
-            client_request.destination_port,
-        );
-
-        let remote_conn = TcpStream::connect(remote_addr).unwrap();
-        let local_addr = remote_conn.local_addr().unwrap();
-
-        let mut ip = [0, 0, 0, 0];
-        match local_addr.ip() {
-            IpAddr::V4(ipv4) => {
-                ip = ipv4.octets();
+        let remote_conn = match client_request.destination_addr {
+            DestinationAddress::Ipv4(v4_addr) => {
+                TcpStream::connect(format!("{}:{}", v4_addr, client_request.destination_port))
+                    .unwrap()
             }
-            IpAddr::V6(ipv6) => (),
+            DestinationAddress::Ipv6(v6_addr) => {
+                TcpStream::connect(format!("{}:{}", v6_addr, client_request.destination_port))
+                    .unwrap()
+            }
+            DestinationAddress::DomainName(domain) => {
+                TcpStream::connect(format!("{}:{}", domain, client_request.destination_port))
+                    .unwrap()
+            }
         };
 
+        let local_addr = remote_conn.local_addr().unwrap();
         let port = u16::to_be_bytes(local_addr.port());
-        let buf = vec![5, 0, 0, 1, ip[0], ip[1], ip[2], ip[3], port[0], port[1]];
+
+        let buf = match local_addr.ip() {
+            IpAddr::V4(ipv4) => {
+                let ip = ipv4.octets();
+                vec![5, 0, 0, 1, ip[0], ip[1], ip[2], ip[3], port[0], port[1]]
+            }
+            IpAddr::V6(ipv6) => {
+                let ip = ipv6.octets();
+                vec![
+                    5, 0, 0, 4, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7], ip[8],
+                    ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15], port[0], port[1],
+                ]
+            }
+        };
 
         stream.write_all(&buf).unwrap();
 
