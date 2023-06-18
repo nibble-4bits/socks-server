@@ -1,5 +1,5 @@
 use num_derive::{FromPrimitive, ToPrimitive};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 use std::{process, thread};
 
@@ -323,9 +323,6 @@ fn handle_packet_relay(mut client_conn: TcpStream, mut remote_conn: TcpStream) {
         let mut buf = [0; 65535];
         let n = match remote_conn_2.read(&mut buf) {
             Ok(s) => s,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                continue;
-            }
             Err(e) => panic!("encountered IO error: {e}"),
         };
 
