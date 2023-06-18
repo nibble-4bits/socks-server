@@ -22,6 +22,30 @@ struct ClientHello {
     methods: Vec<AuthMethod>,
 }
 
+// +----+--------+
+// |VER | METHOD |
+// +----+--------+
+// | 1  |   1    |
+// +----+--------+
+#[derive(Debug)]
+struct ServerHello {
+    version: u8,
+    method: AuthMethod,
+}
+
+impl ServerHello {
+    fn new(version: u8, method: AuthMethod) -> Self {
+        Self { version, method }
+    }
+
+    fn as_bytes(&self) -> [u8; 2] {
+        [
+            self.version,
+            num_traits::ToPrimitive::to_u8(&self.method).unwrap(),
+        ]
+    }
+}
+
 #[derive(Debug, FromPrimitive, ToPrimitive)]
 enum AddressType {
     Ipv4 = 1,
@@ -49,6 +73,67 @@ struct ClientRequest {
     address_type: AddressType,
     destination_addr: DestinationAddress,
     destination_port: u16,
+}
+
+// +----+-----+-------+------+----------+----------+
+// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+// +----+-----+-------+------+----------+----------+
+// | 1  |  1  | X'00' |  1   | Variable |    2     |
+// +----+-----+-------+------+----------+----------+
+#[derive(Debug)]
+struct ServerReply {
+    version: u8,
+    reply: u8,
+    reserved: u8,
+    address_type: AddressType,
+    bound_address: DestinationAddress,
+    bound_port: u16,
+}
+
+impl ServerReply {
+    fn new(
+        version: u8,
+        reply: u8,
+        address_type: AddressType,
+        bound_address: DestinationAddress,
+        bound_port: u16,
+    ) -> Self {
+        Self {
+            version,
+            reply,
+            reserved: 0,
+            address_type,
+            bound_address,
+            bound_port,
+        }
+    }
+
+    fn as_bytes(&self) -> Vec<u8> {
+        let mut packet = vec![
+            self.version,
+            self.reply,
+            self.reserved,
+            num_traits::ToPrimitive::to_u8(&self.address_type).unwrap(),
+        ];
+        let port = u16::to_be_bytes(self.bound_port);
+
+        match &self.bound_address {
+            DestinationAddress::Ipv4(v4_addr) => {
+                packet.extend_from_slice(v4_addr.octets().as_slice());
+                packet.extend_from_slice(port.as_slice());
+            }
+            DestinationAddress::Ipv6(v6_addr) => {
+                packet.extend_from_slice(v6_addr.octets().as_slice());
+                packet.extend_from_slice(port.as_slice());
+            }
+            DestinationAddress::DomainName(domain) => {
+                packet.push(domain.len() as u8);
+                packet.extend_from_slice(domain.as_bytes());
+            }
+        };
+
+        packet
+    }
 }
 
 pub struct SocksServer;
@@ -164,8 +249,9 @@ impl SocksServer {
     }
 
     fn send_server_hello(&self, stream: &mut TcpStream, client_hello: ClientHello) {
-        let buf = [5, 0];
-        stream.write_all(&buf).unwrap();
+        stream
+            .write_all(&ServerHello::new(5, AuthMethod::NoAuth).as_bytes())
+            .unwrap();
     }
 
     fn send_server_reply(
@@ -173,11 +259,6 @@ impl SocksServer {
         stream: &mut TcpStream,
         client_request: ClientRequest,
     ) -> TcpStream {
-        // +----+-----+-------+------+----------+----------+
-        // |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-        // +----+-----+-------+------+----------+----------+
-        // | 1  |  1  | X'00' |  1   | Variable |    2     |
-        // +----+-----+-------+------+----------+----------+
         let remote_conn = match client_request.destination_addr {
             DestinationAddress::Ipv4(v4_addr) => {
                 TcpStream::connect(format!("{}:{}", v4_addr, client_request.destination_port))
@@ -194,20 +275,24 @@ impl SocksServer {
         };
 
         let local_addr = remote_conn.local_addr().unwrap();
-        let port = u16::to_be_bytes(local_addr.port());
 
         let buf = match local_addr.ip() {
-            IpAddr::V4(ipv4) => {
-                let ip = ipv4.octets();
-                vec![5, 0, 0, 1, ip[0], ip[1], ip[2], ip[3], port[0], port[1]]
-            }
-            IpAddr::V6(ipv6) => {
-                let ip = ipv6.octets();
-                vec![
-                    5, 0, 0, 4, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7], ip[8],
-                    ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15], port[0], port[1],
-                ]
-            }
+            IpAddr::V4(v4_addr) => ServerReply::new(
+                5,
+                0,
+                AddressType::Ipv4,
+                DestinationAddress::Ipv4(v4_addr),
+                local_addr.port(),
+            )
+            .as_bytes(),
+            IpAddr::V6(v6_addr) => ServerReply::new(
+                5,
+                0,
+                AddressType::Ipv6,
+                DestinationAddress::Ipv6(v6_addr),
+                local_addr.port(),
+            )
+            .as_bytes(),
         };
 
         stream.write_all(&buf).unwrap();
