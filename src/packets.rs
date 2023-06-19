@@ -1,17 +1,28 @@
-use num_derive::{FromPrimitive, ToPrimitive};
-use std::{
-    net::{Ipv4Addr, Ipv6Addr},
-    process,
-};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::process;
 
-const SOCKS_VERSION: u8 = 5;
+pub const SOCKS_VERSION: u8 = 5;
 
-#[derive(Debug, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Clone, Copy)]
 pub enum AuthMethod {
     NoAuth,
     Gssapi,
     UserPassword,
     NoAcceptableMethod = 255,
+}
+
+impl TryFrom<u8> for AuthMethod {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(AuthMethod::NoAuth),
+            1 => Ok(AuthMethod::Gssapi),
+            2 => Ok(AuthMethod::UserPassword),
+            255 => Ok(AuthMethod::NoAcceptableMethod),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -33,7 +44,7 @@ impl ClientHello {
 
         let mut methods = Vec::with_capacity(n_methods as usize);
         for &method in &raw_packet[2..] {
-            if let Some(method) = num_traits::FromPrimitive::from_u8(method) {
+            if let Ok(method) = AuthMethod::try_from(method) {
                 methods.push(method);
             }
         }
@@ -63,18 +74,28 @@ impl ServerHello {
     // | 1  |   1    |
     // +----+--------+
     pub fn as_bytes(&self) -> [u8; 2] {
-        [
-            self.version,
-            num_traits::ToPrimitive::to_u8(&self.method).unwrap(),
-        ]
+        [self.version, self.method as u8]
     }
 }
 
-#[derive(Debug, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Clone, Copy)]
 pub enum AddressType {
     Ipv4 = 1,
     DomainName = 3,
     Ipv6 = 4,
+}
+
+impl TryFrom<u8> for AddressType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(AddressType::Ipv4),
+            3 => Ok(AddressType::DomainName),
+            4 => Ok(AddressType::Ipv6),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -105,8 +126,7 @@ impl ClientRequest {
         let _reserved = raw_packet[2];
         let address_type = raw_packet[3];
 
-        let address_type = if let Some(addr_type) = num_traits::FromPrimitive::from_u8(address_type)
-        {
+        let address_type = if let Ok(addr_type) = AddressType::try_from(address_type) {
             addr_type
         } else {
             eprintln!("Unrecognized address type {address_type}");
@@ -184,7 +204,7 @@ impl ServerReply {
             self.version,
             self.reply,
             self.reserved,
-            num_traits::ToPrimitive::to_u8(&self.address_type).unwrap(),
+            self.address_type as u8,
         ];
         let port = u16::to_be_bytes(self.bound_port);
 
