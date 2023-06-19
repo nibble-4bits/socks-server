@@ -87,6 +87,18 @@ impl SocksServer {
         remote_conn
     }
 
+    fn handle_connection(&self, mut client_conn: TcpStream) {
+        let client_hello = self.read_client_hello(&mut client_conn);
+        self.send_server_hello(&mut client_conn, client_hello);
+
+        let client_request = self.read_client_request(&mut client_conn);
+        let remote_conn = self.send_server_reply(&mut client_conn, client_request);
+
+        thread::spawn(|| {
+            handle_packet_relay(client_conn, remote_conn);
+        });
+    }
+
     pub fn listen(&self, port: i32) {
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))
             .expect("TCP listener should have been created");
@@ -94,21 +106,13 @@ impl SocksServer {
         println!("Server listening on port: {}", port);
 
         loop {
-            let (mut client_conn, remote) = listener
+            let (client_conn, remote) = listener
                 .accept()
                 .expect("Peer connection should have been accepted");
 
             println!("Accepted connection from {}", remote);
 
-            let client_hello = self.read_client_hello(&mut client_conn);
-            self.send_server_hello(&mut client_conn, client_hello);
-
-            let client_request = self.read_client_request(&mut client_conn);
-            let remote_conn = self.send_server_reply(&mut client_conn, client_request);
-
-            thread::spawn(|| {
-                handle_packet_relay(client_conn, remote_conn);
-            });
+            self.handle_connection(client_conn);
         }
     }
 }
