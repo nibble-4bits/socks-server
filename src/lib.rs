@@ -1,6 +1,7 @@
-use std::io::{Read, Write};
-use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
-use std::thread;
+use std::net::IpAddr;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task;
 
 mod packets;
 use packets::{
@@ -15,35 +16,36 @@ impl SocksServer {
         SocksServer {}
     }
 
-    fn read_client_hello(&self, stream: &mut TcpStream) -> ClientHello {
+    async fn read_client_hello(&self, stream: &mut TcpStream) -> ClientHello {
         let mut raw_packet = [0; 512];
-        let n = stream.read(&mut raw_packet).unwrap();
+        let n = stream.read(&mut raw_packet).await.unwrap();
 
         ClientHello::new(&raw_packet[..n])
     }
 
-    fn send_server_hello(&self, stream: &mut TcpStream, client_hello: ClientHello) {
+    async fn send_server_hello(&self, stream: &mut TcpStream, client_hello: ClientHello) {
         if client_hello.version != SOCKS_VERSION {
             println!("Unrecognized SOCKS version {}", client_hello.version);
 
-            stream.shutdown(Shutdown::Both).unwrap();
+            stream.shutdown().await.unwrap();
 
             return;
         }
 
         stream
             .write_all(&ServerHello::new(AuthMethod::NoAuth).as_bytes())
+            .await
             .unwrap();
     }
 
-    fn read_client_request(&self, stream: &mut TcpStream) -> ClientRequest {
+    async fn read_client_request(&self, stream: &mut TcpStream) -> ClientRequest {
         let mut raw_packet = [0; 512];
-        let n = stream.read(&mut raw_packet).unwrap();
+        let n = stream.read(&mut raw_packet).await.unwrap();
 
         ClientRequest::new(&raw_packet[..n])
     }
 
-    fn send_server_reply(
+    async fn send_server_reply(
         &self,
         stream: &mut TcpStream,
         client_request: ClientRequest,
@@ -51,14 +53,17 @@ impl SocksServer {
         let remote_conn = match client_request.destination_addr {
             DestinationAddress::Ipv4(v4_addr) => {
                 TcpStream::connect(format!("{}:{}", v4_addr, client_request.destination_port))
+                    .await
                     .unwrap()
             }
             DestinationAddress::Ipv6(v6_addr) => {
                 TcpStream::connect(format!("{}:{}", v6_addr, client_request.destination_port))
+                    .await
                     .unwrap()
             }
             DestinationAddress::DomainName(domain) => {
                 TcpStream::connect(format!("{}:{}", domain, client_request.destination_port))
+                    .await
                     .unwrap()
             }
         };
@@ -82,25 +87,28 @@ impl SocksServer {
             .as_bytes(),
         };
 
-        stream.write_all(&buf).unwrap();
+        stream.write_all(&buf).await.unwrap();
 
         remote_conn
     }
 
-    fn handle_connection(&self, mut client_conn: TcpStream) {
-        let client_hello = self.read_client_hello(&mut client_conn);
-        self.send_server_hello(&mut client_conn, client_hello);
+    async fn handle_connection(&self, mut client_conn: TcpStream) {
+        let client_hello = self.read_client_hello(&mut client_conn).await;
+        self.send_server_hello(&mut client_conn, client_hello).await;
 
-        let client_request = self.read_client_request(&mut client_conn);
-        let remote_conn = self.send_server_reply(&mut client_conn, client_request);
+        let client_request = self.read_client_request(&mut client_conn).await;
+        let remote_conn = self
+            .send_server_reply(&mut client_conn, client_request)
+            .await;
 
-        thread::spawn(|| {
-            handle_packet_relay(client_conn, remote_conn);
+        task::spawn(async {
+            handle_packet_relay(client_conn, remote_conn).await;
         });
     }
 
-    pub fn listen(&self, port: i32) {
+    pub async fn listen(&self, port: i32) {
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))
+            .await
             .expect("TCP listener should have been created");
 
         println!("Server listening on port: {}", port);
@@ -108,49 +116,46 @@ impl SocksServer {
         loop {
             let (client_conn, remote) = listener
                 .accept()
+                .await
                 .expect("Peer connection should have been accepted");
 
             println!("Accepted connection from {}", remote);
 
-            self.handle_connection(client_conn);
+            self.handle_connection(client_conn).await;
         }
     }
 }
 
-fn handle_packet_relay(mut client_conn: TcpStream, mut remote_conn: TcpStream) {
-    let mut client_conn_2 = client_conn.try_clone().unwrap();
-    let mut remote_conn_2 = remote_conn.try_clone().unwrap();
+async fn handle_packet_relay(client_conn: TcpStream, remote_conn: TcpStream) {
+    let (mut client_conn_rx, mut client_conn_tx) = client_conn.into_split();
+    let (mut remote_conn_rx, mut remote_conn_tx) = remote_conn.into_split();
 
-    let client_to_remote = thread::spawn(move || loop {
-        let mut buf = [0; 65535];
-        let n = match client_conn.read(&mut buf) {
-            Ok(s) => s,
-            Err(e) => panic!("encountered IO error: {e}"),
-        };
+    let client_to_remote = task::spawn(async move {
+        loop {
+            let n = io::copy(&mut client_conn_rx, &mut remote_conn_tx)
+                .await
+                .unwrap();
 
-        if n == 0 {
-            break;
+            if n == 0 {
+                return;
+            }
         }
-
-        remote_conn.write_all(&buf[..n]).unwrap();
     });
 
-    let remote_to_client = thread::spawn(move || loop {
-        let mut buf = [0; 65535];
-        let n = match remote_conn_2.read(&mut buf) {
-            Ok(s) => s,
-            Err(e) => panic!("encountered IO error: {e}"),
-        };
+    let remote_to_client = task::spawn(async move {
+        loop {
+            let n = io::copy(&mut remote_conn_rx, &mut client_conn_tx)
+                .await
+                .unwrap();
 
-        if n == 0 {
-            break;
+            if n == 0 {
+                return;
+            }
         }
-
-        client_conn_2.write_all(&buf[..n]).unwrap();
     });
 
-    client_to_remote.join().unwrap();
-    remote_to_client.join().unwrap();
+    client_to_remote.await.unwrap();
+    remote_to_client.await.unwrap();
 }
 
 impl Default for SocksServer {
