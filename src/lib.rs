@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task;
 
@@ -126,33 +127,24 @@ async fn handle_connection(mut client_conn: TcpStream) {
     handle_packet_relay(client_conn, remote_conn).await;
 }
 
+async fn relay_packets(mut src: OwnedReadHalf, mut dst: OwnedWriteHalf) {
+    loop {
+        let n = io::copy(&mut src, &mut dst).await.unwrap();
+
+        if n == 0 {
+            return;
+        }
+    }
+}
+
 async fn handle_packet_relay(client_conn: TcpStream, remote_conn: TcpStream) {
-    let (mut client_conn_rx, mut client_conn_tx) = client_conn.into_split();
-    let (mut remote_conn_rx, mut remote_conn_tx) = remote_conn.into_split();
+    let (client_conn_rx, client_conn_tx) = client_conn.into_split();
+    let (remote_conn_rx, remote_conn_tx) = remote_conn.into_split();
 
-    let client_to_remote = task::spawn(async move {
-        loop {
-            let n = io::copy(&mut client_conn_rx, &mut remote_conn_tx)
-                .await
-                .unwrap();
-
-            if n == 0 {
-                return;
-            }
-        }
-    });
-
-    let remote_to_client = task::spawn(async move {
-        loop {
-            let n = io::copy(&mut remote_conn_rx, &mut client_conn_tx)
-                .await
-                .unwrap();
-
-            if n == 0 {
-                return;
-            }
-        }
-    });
+    let client_to_remote =
+        task::spawn(async { relay_packets(client_conn_rx, remote_conn_tx).await });
+    let remote_to_client =
+        task::spawn(async { relay_packets(remote_conn_rx, client_conn_tx).await });
 
     client_to_remote.await.unwrap();
     remote_to_client.await.unwrap();
