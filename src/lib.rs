@@ -1,11 +1,11 @@
 use std::io::{Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 use std::thread;
 
 mod packets;
 use packets::{
     AddressType, AuthMethod, ClientHello, ClientRequest, DestinationAddress, ServerHello,
-    ServerReply,
+    ServerReply, SOCKS_VERSION,
 };
 
 pub struct SocksServer;
@@ -23,6 +23,14 @@ impl SocksServer {
     }
 
     fn send_server_hello(&self, stream: &mut TcpStream, client_hello: ClientHello) {
+        if client_hello.version != SOCKS_VERSION {
+            println!("Unrecognized SOCKS version {}", client_hello.version);
+
+            stream.shutdown(Shutdown::Both).unwrap();
+
+            return;
+        }
+
         stream
             .write_all(&ServerHello::new(AuthMethod::NoAuth).as_bytes())
             .unwrap();
