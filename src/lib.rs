@@ -24,12 +24,12 @@ impl SocksServer {
         println!("Server listening on port: {}", port);
 
         loop {
-            let (client_conn, remote) = listener
+            let (client_conn, client_addr) = listener
                 .accept()
                 .await
                 .expect("Peer connection should have been accepted");
 
-            println!("Accepted connection from {}", remote);
+            println!("Accepted connection from {}", client_addr);
 
             task::spawn(async {
                 handle_connection(client_conn).await;
