@@ -4,7 +4,7 @@ use std::thread;
 
 mod packets;
 use packets::{
-    AddressType, AuthMethod, ClientHello, ClientRequest, DestinationAddress, ServerHello,
+    AddressType, AuthMethod, ClientHello, ClientRequest, DestinationAddress, Reply, ServerHello,
     ServerReply, SOCKS_VERSION,
 };
 
@@ -67,14 +67,14 @@ impl SocksServer {
 
         let buf = match local_addr.ip() {
             IpAddr::V4(v4_addr) => ServerReply::new(
-                0,
+                Reply::Succeeded,
                 AddressType::Ipv4,
                 DestinationAddress::Ipv4(v4_addr),
                 local_addr.port(),
             )
             .as_bytes(),
             IpAddr::V6(v6_addr) => ServerReply::new(
-                0,
+                Reply::Succeeded,
                 AddressType::Ipv6,
                 DestinationAddress::Ipv6(v6_addr),
                 local_addr.port(),

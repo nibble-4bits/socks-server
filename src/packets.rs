@@ -106,9 +106,29 @@ pub enum DestinationAddress {
 }
 
 #[derive(Debug)]
+pub enum RequestCommand {
+    Connect = 1,
+    Bind,
+    UdpAssociate,
+}
+
+impl TryFrom<u8> for RequestCommand {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(RequestCommand::Connect),
+            2 => Ok(RequestCommand::Bind),
+            3 => Ok(RequestCommand::UdpAssociate),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ClientRequest {
     pub version: u8,
-    pub command: u8,
+    pub command: RequestCommand,
     pub destination_addr: DestinationAddress,
     pub destination_port: u16,
 }
@@ -123,6 +143,12 @@ impl ClientRequest {
     pub fn new(raw_packet: &[u8]) -> Self {
         let version = raw_packet[0];
         let command = raw_packet[1];
+        let command = if let Ok(cmd) = RequestCommand::try_from(command) {
+            cmd
+        } else {
+            eprintln!("Unrecognized request command {command}");
+            process::exit(1);
+        };
         let _reserved = raw_packet[2];
         let address_type = raw_packet[3];
 
@@ -167,15 +193,23 @@ impl ClientRequest {
     }
 }
 
-// +----+-----+-------+------+----------+----------+
-// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-// +----+-----+-------+------+----------+----------+
-// | 1  |  1  | X'00' |  1   | Variable |    2     |
-// +----+-----+-------+------+----------+----------+
+#[derive(Debug, Clone, Copy)]
+pub enum Reply {
+    Succeeded = 0,
+    _SocksServerFail,
+    _ConnNotAllowed,
+    _NetUnreachable,
+    _HostUnreachable,
+    _ConnRefused,
+    _TTLExpired,
+    _CmdNotSupported,
+    _AddrTypeNotSupported,
+}
+
 #[derive(Debug)]
 pub struct ServerReply {
     pub version: u8,
-    pub reply: u8,
+    pub reply: Reply,
     pub reserved: u8,
     pub address_type: AddressType,
     pub bound_address: DestinationAddress,
@@ -184,7 +218,7 @@ pub struct ServerReply {
 
 impl ServerReply {
     pub fn new(
-        reply: u8,
+        reply: Reply,
         address_type: AddressType,
         bound_address: DestinationAddress,
         bound_port: u16,
@@ -199,10 +233,16 @@ impl ServerReply {
         }
     }
 
+    // Raw packet has the following structure:
+    // +----+-----+-------+------+----------+----------+
+    // |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+    // +----+-----+-------+------+----------+----------+
+    // | 1  |  1  | X'00' |  1   | Variable |    2     |
+    // +----+-----+-------+------+----------+----------+
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut packet = vec![
             self.version,
-            self.reply,
+            self.reply as u8,
             self.reserved,
             self.address_type as u8,
         ];
