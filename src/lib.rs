@@ -5,10 +5,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task;
 
 mod packets;
-use packets::{
-    AddressType, AuthMethod, ClientHello, ClientRequest, DestinationAddress, Reply, ServerHello,
-    ServerReply, SOCKS_VERSION,
-};
+use packets::client_hello::ClientHello;
+use packets::client_request::ClientRequest;
+use packets::server_hello::ServerHello;
+use packets::server_reply::{Reply, ServerReply};
+use packets::{AddressType, AuthMethod, DestinationAddress, SOCKS_VERSION};
 
 pub struct SocksServer;
 
