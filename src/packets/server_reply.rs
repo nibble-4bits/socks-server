@@ -1,4 +1,4 @@
-use super::{AddressType, DestinationAddress, SOCKS_VERSION};
+use super::{AddressType, DestinationAddress, RESERVED, SOCKS_VERSION};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Reply {
@@ -33,7 +33,7 @@ impl ServerReply {
         Self {
             version: SOCKS_VERSION,
             reply,
-            reserved: 0,
+            reserved: RESERVED,
             address_type,
             bound_address,
             bound_port,

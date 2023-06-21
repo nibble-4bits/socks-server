@@ -47,7 +47,8 @@ impl ClientRequest {
             eprintln!("Unrecognized request command {command}");
             process::exit(1);
         };
-        let _reserved = raw_packet[2];
+        #[allow(unused_variables)]
+        let reserved = raw_packet[2];
         let address_type = raw_packet[3];
 
         let address_type = if let Ok(addr_type) = AddressType::try_from(address_type) {
