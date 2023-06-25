@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "unstable", feature(io_error_more))]
+
 use std::net::IpAddr;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -64,6 +66,44 @@ async fn send_server_hello(
     stream.write_all(&buf).await?;
 
     Ok(())
+}
+
+async fn handle_client_request_error(stream: &mut TcpStream, error: &ClientRequestError) {
+    use ClientRequestError::*;
+
+    let reply_packet = match error {
+        ErrUnsupportedBindCommand | ErrUnsupportedUDPAssociateCommand | ErrUnknownCommand => {
+            ServerReply::new_unsuccessful_reply(Reply::CmdNotSupported)
+        }
+        ErrUnknownAddressType => ServerReply::new_unsuccessful_reply(Reply::AddrTypeNotSupported),
+        _ => ServerReply::new_unsuccessful_reply(Reply::SocksServerFail),
+    };
+
+    stream.write_all(&reply_packet.as_bytes()).await.unwrap();
+}
+
+async fn handle_server_reply_error(stream: &mut TcpStream, error: &ServerReplyError) {
+    use ServerReplyError::*;
+
+    let reply_packet = match error {
+        IoError(io_err) => match io_err.kind() {
+            #[cfg(feature = "unstable")]
+            io::ErrorKind::NetworkUnreachable => {
+                ServerReply::new_unsuccessful_reply(Reply::NetUnreachable)
+            }
+            #[cfg(feature = "unstable")]
+            io::ErrorKind::HostUnreachable => {
+                ServerReply::new_unsuccessful_reply(Reply::HostUnreachable)
+            }
+            io::ErrorKind::ConnectionRefused => {
+                ServerReply::new_unsuccessful_reply(Reply::ConnRefused)
+            }
+            _ => ServerReply::new_unsuccessful_reply(Reply::SocksServerFail),
+        },
+    };
+
+    println!("{:?}", reply_packet);
+    stream.write_all(&reply_packet.as_bytes()).await.unwrap();
 }
 
 async fn read_client_request(stream: &mut TcpStream) -> Result<ClientRequest, ClientRequestError> {
@@ -133,6 +173,7 @@ async fn handle_connection(mut client_conn: TcpStream) {
         Ok(packet) => packet,
         Err(e) => {
             eprintln!("Error encountered: {}. Closing connection.", e);
+            handle_client_request_error(&mut client_conn, &e).await;
             return;
         }
     };
@@ -140,6 +181,7 @@ async fn handle_connection(mut client_conn: TcpStream) {
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("Error encountered: {}. Closing connection.", e);
+            handle_server_reply_error(&mut client_conn, &e).await;
             return;
         }
     };

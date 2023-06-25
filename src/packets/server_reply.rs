@@ -1,13 +1,19 @@
+use std::net::Ipv4Addr;
+
 use super::{AddressType, DestinationAddress, RESERVED, SOCKS_VERSION};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Reply {
     Succeeded = 0,
     SocksServerFail,
+    #[allow(unused)]
     ConnNotAllowed,
+    #[allow(unused)]
     NetUnreachable,
+    #[allow(unused)]
     HostUnreachable,
     ConnRefused,
+    #[allow(unused)]
     TTLExpired,
     CmdNotSupported,
     AddrTypeNotSupported,
@@ -37,6 +43,17 @@ impl ServerReply {
             address_type,
             bound_address,
             bound_port,
+        }
+    }
+
+    pub fn new_unsuccessful_reply(reply: Reply) -> Self {
+        Self {
+            version: SOCKS_VERSION,
+            reply,
+            reserved: RESERVED,
+            address_type: AddressType::Ipv4,
+            bound_address: DestinationAddress::Ipv4(Ipv4Addr::new(0, 0, 0, 0)),
+            bound_port: 0,
         }
     }
 
