@@ -54,5 +54,6 @@ pub enum DestinationAddress {
 
 pub mod client_hello;
 pub mod client_request;
+pub mod errors;
 pub mod server_hello;
 pub mod server_reply;

@@ -1,9 +1,9 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::process;
 
-use super::{AddressType, DestinationAddress};
+use super::errors::ClientRequestError;
+use super::{AddressType, DestinationAddress, SOCKS_VERSION};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RequestCommand {
     Connect = 1,
     Bind,
@@ -38,24 +38,37 @@ impl ClientRequest {
     // +----+-----+-------+------+----------+----------+
     // | 1  |  1  | X'00' |  1   | Variable |    2     |
     // +----+-----+-------+------+----------+----------+
-    pub fn new(raw_packet: &[u8]) -> Self {
+    pub fn new(raw_packet: &[u8]) -> Result<Self, ClientRequestError> {
+        if raw_packet.len() < 10 {
+            return Err(ClientRequestError::MalformedPacket);
+        }
+
         let version = raw_packet[0];
+        if version != SOCKS_VERSION {
+            return Err(ClientRequestError::UnexpectedProtocolVersion(version));
+        }
+
         let command = raw_packet[1];
         let command = if let Ok(cmd) = RequestCommand::try_from(command) {
+            if cmd == RequestCommand::Bind {
+                return Err(ClientRequestError::ErrUnsupportedBindCommand);
+            } else if cmd == RequestCommand::UdpAssociate {
+                return Err(ClientRequestError::ErrUnsupportedUDPAssociateCommand);
+            }
+
             cmd
         } else {
-            eprintln!("Unrecognized request command {command}");
-            process::exit(1);
+            return Err(ClientRequestError::ErrUnknownCommand);
         };
+
         #[allow(unused_variables)]
         let reserved = raw_packet[2];
-        let address_type = raw_packet[3];
 
+        let address_type = raw_packet[3];
         let address_type = if let Ok(addr_type) = AddressType::try_from(address_type) {
             addr_type
         } else {
-            eprintln!("Unrecognized address type {address_type}");
-            process::exit(1);
+            return Err(ClientRequestError::ErrUnknownAddressType);
         };
 
         let destination_addr = match address_type {
@@ -83,11 +96,11 @@ impl ClientRequest {
 
         let destination_port: Vec<u8> = raw_packet.iter().rev().cloned().take(2).rev().collect();
 
-        Self {
+        Ok(Self {
             version,
             command,
             destination_addr,
             destination_port: u16::from_be_bytes(destination_port.try_into().unwrap()),
-        }
+        })
     }
 }

@@ -7,9 +7,10 @@ use tokio::task;
 mod packets;
 use packets::client_hello::ClientHello;
 use packets::client_request::ClientRequest;
+use packets::errors::{ClientHelloError, ClientRequestError, ServerHelloError, ServerReplyError};
 use packets::server_hello::ServerHello;
 use packets::server_reply::{Reply, ServerReply};
-use packets::{AddressType, AuthMethod, DestinationAddress, SOCKS_VERSION};
+use packets::{AddressType, AuthMethod, DestinationAddress};
 
 pub struct SocksServer;
 
@@ -46,55 +47,51 @@ impl Default for SocksServer {
     }
 }
 
-async fn read_client_hello(stream: &mut TcpStream) -> ClientHello {
+async fn read_client_hello(stream: &mut TcpStream) -> Result<ClientHello, ClientHelloError> {
     let mut raw_packet = [0; 512];
-    let n = stream.read(&mut raw_packet).await.unwrap();
+    let n = stream.read(&mut raw_packet).await?;
 
-    ClientHello::new(&raw_packet[..n])
+    let packet = ClientHello::new(&raw_packet[..n])?;
+
+    Ok(packet)
 }
 
-async fn send_server_hello(stream: &mut TcpStream, client_hello: ClientHello) {
-    if client_hello.version != SOCKS_VERSION {
-        println!("Unrecognized SOCKS version {}", client_hello.version);
+async fn send_server_hello(
+    stream: &mut TcpStream,
+    client_hello: ClientHello,
+) -> Result<(), ServerHelloError> {
+    let buf = ServerHello::new(AuthMethod::NoAuth).as_bytes();
+    stream.write_all(&buf).await?;
 
-        stream.shutdown().await.unwrap();
-
-        return;
-    }
-
-    stream
-        .write_all(&ServerHello::new(AuthMethod::NoAuth).as_bytes())
-        .await
-        .unwrap();
+    Ok(())
 }
 
-async fn read_client_request(stream: &mut TcpStream) -> ClientRequest {
+async fn read_client_request(stream: &mut TcpStream) -> Result<ClientRequest, ClientRequestError> {
     let mut raw_packet = [0; 512];
-    let n = stream.read(&mut raw_packet).await.unwrap();
+    let n = stream.read(&mut raw_packet).await?;
 
-    ClientRequest::new(&raw_packet[..n])
+    let packet = ClientRequest::new(&raw_packet[..n])?;
+
+    Ok(packet)
 }
 
-async fn send_server_reply(stream: &mut TcpStream, client_request: ClientRequest) -> TcpStream {
+async fn send_server_reply(
+    stream: &mut TcpStream,
+    client_request: ClientRequest,
+) -> Result<TcpStream, ServerReplyError> {
     let remote_conn = match client_request.destination_addr {
         DestinationAddress::Ipv4(v4_addr) => {
-            TcpStream::connect(format!("{}:{}", v4_addr, client_request.destination_port))
-                .await
-                .unwrap()
+            TcpStream::connect(format!("{}:{}", v4_addr, client_request.destination_port)).await?
         }
         DestinationAddress::Ipv6(v6_addr) => {
-            TcpStream::connect(format!("{}:{}", v6_addr, client_request.destination_port))
-                .await
-                .unwrap()
+            TcpStream::connect(format!("{}:{}", v6_addr, client_request.destination_port)).await?
         }
         DestinationAddress::DomainName(domain) => {
-            TcpStream::connect(format!("{}:{}", domain, client_request.destination_port))
-                .await
-                .unwrap()
+            TcpStream::connect(format!("{}:{}", domain, client_request.destination_port)).await?
         }
     };
 
-    let local_addr = remote_conn.local_addr().unwrap();
+    let local_addr = remote_conn.local_addr()?;
 
     let buf = match local_addr.ip() {
         IpAddr::V4(v4_addr) => ServerReply::new(
@@ -113,24 +110,49 @@ async fn send_server_reply(stream: &mut TcpStream, client_request: ClientRequest
         .as_bytes(),
     };
 
-    stream.write_all(&buf).await.unwrap();
+    stream.write_all(&buf).await?;
 
-    remote_conn
+    Ok(remote_conn)
 }
 
 async fn handle_connection(mut client_conn: TcpStream) {
-    let client_hello = read_client_hello(&mut client_conn).await;
-    send_server_hello(&mut client_conn, client_hello).await;
+    let client_hello = match read_client_hello(&mut client_conn).await {
+        Ok(packet) => packet,
+        Err(e) => {
+            eprintln!("Error encountered: {}. Closing connection.", e);
+            return;
+        }
+    };
 
-    let client_request = read_client_request(&mut client_conn).await;
-    let remote_conn = send_server_reply(&mut client_conn, client_request).await;
+    if let Err(e) = send_server_hello(&mut client_conn, client_hello).await {
+        eprintln!("Error encountered: {}. Closing connection.", e);
+        return;
+    }
+
+    let client_request = match read_client_request(&mut client_conn).await {
+        Ok(packet) => packet,
+        Err(e) => {
+            eprintln!("Error encountered: {}. Closing connection.", e);
+            return;
+        }
+    };
+    let remote_conn = match send_server_reply(&mut client_conn, client_request).await {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Error encountered: {}. Closing connection.", e);
+            return;
+        }
+    };
 
     handle_packet_relay(client_conn, remote_conn).await;
 }
 
 async fn relay_packets(mut src: OwnedReadHalf, mut dst: OwnedWriteHalf) {
     loop {
-        let n = io::copy(&mut src, &mut dst).await.unwrap();
+        let n = match io::copy(&mut src, &mut dst).await {
+            Ok(bytes_read) => bytes_read,
+            Err(_) => return,
+        };
 
         if n == 0 {
             return;
