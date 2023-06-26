@@ -1,6 +1,5 @@
 #![cfg_attr(feature = "unstable", feature(io_error_more))]
 
-use std::net::IpAddr;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -12,7 +11,7 @@ use packets::client_request::ClientRequest;
 use packets::errors::{ClientHelloError, ClientRequestError, ServerHelloError, ServerReplyError};
 use packets::server_hello::ServerHello;
 use packets::server_reply::{Reply, ServerReply};
-use packets::{AddressType, AuthMethod, DestinationAddress};
+use packets::{AuthMethod, DestinationAddress};
 
 pub struct SocksServer;
 
@@ -132,23 +131,7 @@ async fn send_server_reply(
     };
 
     let local_addr = remote_conn.local_addr()?;
-
-    let buf = match local_addr.ip() {
-        IpAddr::V4(v4_addr) => ServerReply::new(
-            Reply::Succeeded,
-            AddressType::Ipv4,
-            DestinationAddress::Ipv4(v4_addr),
-            local_addr.port(),
-        )
-        .as_bytes(),
-        IpAddr::V6(v6_addr) => ServerReply::new(
-            Reply::Succeeded,
-            AddressType::Ipv6,
-            DestinationAddress::Ipv6(v6_addr),
-            local_addr.port(),
-        )
-        .as_bytes(),
-    };
+    let buf = ServerReply::new_successful_reply(local_addr).as_bytes();
 
     stream.write_all(&buf).await?;
 

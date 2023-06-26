@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use super::{AddressType, DestinationAddress, RESERVED, SOCKS_VERSION};
 
@@ -30,19 +30,19 @@ pub struct ServerReply {
 }
 
 impl ServerReply {
-    pub fn new(
-        reply: Reply,
-        address_type: AddressType,
-        bound_address: DestinationAddress,
-        bound_port: u16,
-    ) -> Self {
+    pub fn new_successful_reply(sock_addr: SocketAddr) -> Self {
+        let (address_type, bound_address) = match sock_addr.ip() {
+            IpAddr::V4(v4_addr) => (AddressType::Ipv4, DestinationAddress::Ipv4(v4_addr)),
+            IpAddr::V6(v6_addr) => (AddressType::Ipv6, DestinationAddress::Ipv6(v6_addr)),
+        };
+
         Self {
             version: SOCKS_VERSION,
-            reply,
+            reply: Reply::Succeeded,
             reserved: RESERVED,
             address_type,
             bound_address,
-            bound_port,
+            bound_port: sock_addr.port(),
         }
     }
 
