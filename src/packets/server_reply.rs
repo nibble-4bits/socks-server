@@ -81,10 +81,7 @@ impl ServerReply {
                 packet.extend_from_slice(v6_addr.octets().as_slice());
                 packet.extend_from_slice(port.as_slice());
             }
-            DestinationAddress::DomainName(domain) => {
-                packet.push(domain.len() as u8);
-                packet.extend_from_slice(domain.as_bytes());
-            }
+            _ => {}
         };
 
         packet
