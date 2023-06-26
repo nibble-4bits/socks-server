@@ -1,6 +1,6 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-pub const SOCKS_VERSION: u8 = 5;
+const SOCKS_VERSION: u8 = 5;
 const RESERVED: u8 = 0;
 
 #[derive(Debug, Clone, Copy)]
