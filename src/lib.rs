@@ -1,42 +1,69 @@
 #![cfg_attr(feature = "unstable", feature(io_error_more))]
 
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task;
 
 mod packets;
-use packets::client_hello::ClientHello;
-use packets::client_request::ClientRequest;
-use packets::errors::{ClientHelloError, ClientRequestError, ServerHelloError, ServerReplyError};
+
+use packets::client_user_pass_auth::ClientUserPassAuth;
+use packets::errors::{
+    ClientHelloError, ClientRequestError, ServerHelloError, ServerReplyError, UserPassAuthError,
+};
 use packets::server_hello::ServerHello;
 use packets::server_reply::{Reply, ServerReply};
-use packets::{AuthMethod, DestinationAddress};
+use packets::server_user_pass_response::ServerUserPassResponse;
+pub use packets::AuthMethod;
+use packets::DestinationAddress;
+use packets::{client_hello::ClientHello, client_request::ClientRequest};
 
-pub struct SocksServer;
+#[derive(Debug, Clone)]
+pub struct AuthParams {
+    pub logins: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthSettings {
+    pub method: AuthMethod,
+    pub params: Option<AuthParams>,
+}
+
+pub struct SocksServer {
+    auth_settings: AuthSettings,
+}
 
 impl SocksServer {
-    pub fn new() -> Self {
-        SocksServer {}
+    pub fn new(auth_settings: AuthSettings) -> Self {
+        SocksServer { auth_settings }
     }
 
-    pub async fn listen(&self, port: i32) {
-        let listener = TcpListener::bind(format!("0.0.0.0:{port}"))
-            .await
-            .expect("TCP listener should have been created");
+    pub async fn listen(&self, ip: &str, port: u16) -> Result<(), io::Error> {
+        let parsed_ip = ip
+            .parse::<IpAddr>()
+            .unwrap_or_else(|_| panic!("`{ip}` is not a valid IP address"));
+        let bound_addr = SocketAddr::from((parsed_ip, port));
+        let listener = TcpListener::bind(bound_addr).await?;
 
         println!("Server listening on port: {}", port);
 
         loop {
-            let (client_conn, client_addr) = listener
-                .accept()
-                .await
-                .expect("Peer connection should have been accepted");
+            let (client_conn, client_addr) = match listener.accept().await {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("Error while attempting to accept client connection: {}", e);
+                    continue;
+                }
+            };
 
             println!("Accepted connection from {}", client_addr);
 
+            let auth_settings = self.auth_settings.clone();
             task::spawn(async {
-                handle_connection(client_conn).await;
+                handle_connection(client_conn, auth_settings).await;
             });
         }
     }
@@ -44,7 +71,10 @@ impl SocksServer {
 
 impl Default for SocksServer {
     fn default() -> Self {
-        SocksServer::new()
+        SocksServer::new(AuthSettings {
+            method: AuthMethod::NoAuth,
+            params: None,
+        })
     }
 }
 
@@ -57,14 +87,52 @@ async fn read_client_hello(stream: &mut TcpStream) -> Result<ClientHello, Client
     Ok(packet)
 }
 
+async fn handle_user_pass_auth(
+    stream: &mut TcpStream,
+    auth_settings: AuthSettings,
+) -> Result<(), UserPassAuthError> {
+    let mut raw_packet = [0; 513];
+    let n = stream.read(&mut raw_packet).await?;
+
+    let packet = ClientUserPassAuth::new(&raw_packet[..n]);
+    if let Some(params) = auth_settings.params {
+        if let Some(s) = params.logins.get(&packet.username) {
+            if *s == packet.password {
+                let response_packet = ServerUserPassResponse::new(true);
+                stream.write_all(&response_packet.as_bytes()).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    let response_packet = ServerUserPassResponse::new(false);
+    stream.write_all(&response_packet.as_bytes()).await?;
+
+    Err(UserPassAuthError::FailedAuth)
+}
+
 async fn send_server_hello(
     stream: &mut TcpStream,
     client_hello: ClientHello,
+    auth_settings: AuthSettings,
 ) -> Result<(), ServerHelloError> {
-    let buf = ServerHello::new(AuthMethod::NoAuth).as_bytes();
+    for method in client_hello.methods {
+        if method == auth_settings.method {
+            let buf = ServerHello::new(auth_settings.method).as_bytes();
+            stream.write_all(&buf).await?;
+
+            if auth_settings.method == AuthMethod::UserPassword {
+                handle_user_pass_auth(stream, auth_settings).await?;
+            }
+
+            return Ok(());
+        }
+    }
+
+    let buf = ServerHello::new(AuthMethod::NoAcceptableMethod).as_bytes();
     stream.write_all(&buf).await?;
 
-    Ok(())
+    Err(ServerHelloError::NoAcceptableAuth)
 }
 
 async fn handle_client_request_error(stream: &mut TcpStream, error: &ClientRequestError) {
@@ -101,7 +169,6 @@ async fn handle_server_reply_error(stream: &mut TcpStream, error: &ServerReplyEr
         },
     };
 
-    println!("{:?}", reply_packet);
     stream.write_all(&reply_packet.as_bytes()).await.unwrap();
 }
 
@@ -138,7 +205,7 @@ async fn send_server_reply(
     Ok(remote_conn)
 }
 
-async fn handle_connection(mut client_conn: TcpStream) {
+async fn handle_connection(mut client_conn: TcpStream, auth_settings: AuthSettings) {
     let client_hello = match read_client_hello(&mut client_conn).await {
         Ok(packet) => packet,
         Err(e) => {
@@ -147,7 +214,7 @@ async fn handle_connection(mut client_conn: TcpStream) {
         }
     };
 
-    if let Err(e) = send_server_hello(&mut client_conn, client_hello).await {
+    if let Err(e) = send_server_hello(&mut client_conn, client_hello, auth_settings).await {
         eprintln!("Error encountered: {}. Closing connection.", e);
         return;
     }
@@ -197,14 +264,3 @@ async fn handle_packet_relay(client_conn: TcpStream, remote_conn: TcpStream) {
     client_to_remote.await.unwrap();
     remote_to_client.await.unwrap();
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn it_works() {
-//         let result = add(2, 2);
-//         assert_eq!(result, 4);
-//     }
-// }

@@ -15,6 +15,18 @@ pub enum ClientHelloError {
 
 #[derive(Debug, Error)]
 pub enum ServerHelloError {
+    #[error("no authentication method is acceptable")]
+    NoAcceptableAuth,
+    #[error("user/pass authentication failed: {0}")]
+    AuthError(#[from] UserPassAuthError),
+    #[error("failed IO operation: {0}")]
+    IoError(#[from] io::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum UserPassAuthError {
+    #[error("user and password did not match")]
+    FailedAuth,
     #[error("failed IO operation: {0}")]
     IoError(#[from] io::Error),
 }

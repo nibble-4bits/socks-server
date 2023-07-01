@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 const SOCKS_VERSION: u8 = 5;
 const RESERVED: u8 = 0;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMethod {
     NoAuth,
     Gssapi,
@@ -54,6 +54,8 @@ pub enum DestinationAddress {
 
 pub mod client_hello;
 pub mod client_request;
+pub mod client_user_pass_auth;
 pub mod errors;
 pub mod server_hello;
 pub mod server_reply;
+pub mod server_user_pass_response;
