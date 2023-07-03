@@ -94,7 +94,7 @@ async fn handle_user_pass_auth(
     let mut raw_packet = [0; 513];
     let n = stream.read(&mut raw_packet).await?;
 
-    let packet = ClientUserPassAuth::new(&raw_packet[..n]);
+    let packet = ClientUserPassAuth::new(&raw_packet[..n])?;
     if let Some(params) = auth_settings.params {
         if let Some(s) = params.logins.get(&packet.username) {
             if *s == packet.password {

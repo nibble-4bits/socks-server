@@ -1,7 +1,7 @@
 use std::io;
 use thiserror::Error;
 
-use super::SOCKS_VERSION;
+use super::{SOCKS_VERSION, USER_PASSWORD_AUTH_VERSION};
 
 #[derive(Debug, Error)]
 pub enum ClientHelloError {
@@ -25,6 +25,13 @@ pub enum ServerHelloError {
 
 #[derive(Debug, Error)]
 pub enum UserPassAuthError {
+    #[error("malformed client user/password auth packet")]
+    MalformedPacket,
+    #[error(
+        "expected user/password auth version to be {}, but received {0}",
+        USER_PASSWORD_AUTH_VERSION
+    )]
+    UnexpectedUserPassAuthVersion(u8),
     #[error("user and password did not match")]
     FailedAuth,
     #[error("failed IO operation: {0}")]

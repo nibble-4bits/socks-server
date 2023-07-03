@@ -2,6 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 const SOCKS_VERSION: u8 = 5;
 const RESERVED: u8 = 0;
+const USER_PASSWORD_AUTH_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMethod {
