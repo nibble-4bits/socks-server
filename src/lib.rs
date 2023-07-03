@@ -135,7 +135,7 @@ async fn send_server_hello(
     Err(ServerHelloError::NoAcceptableAuth)
 }
 
-async fn handle_client_request_error(stream: &mut TcpStream, error: &ClientRequestError) {
+async fn handle_client_request_error(stream: &mut TcpStream, error: ClientRequestError) {
     use ClientRequestError::*;
 
     let reply_packet = match error {
@@ -149,7 +149,7 @@ async fn handle_client_request_error(stream: &mut TcpStream, error: &ClientReque
     stream.write_all(&reply_packet.as_bytes()).await.unwrap();
 }
 
-async fn handle_server_reply_error(stream: &mut TcpStream, error: &ServerReplyError) {
+async fn handle_server_reply_error(stream: &mut TcpStream, error: ServerReplyError) {
     use ServerReplyError::*;
 
     let reply_packet = match error {
@@ -223,7 +223,7 @@ async fn handle_connection(mut client_conn: TcpStream, auth_settings: AuthSettin
         Ok(packet) => packet,
         Err(e) => {
             eprintln!("Error encountered: {}. Closing connection.", e);
-            handle_client_request_error(&mut client_conn, &e).await;
+            handle_client_request_error(&mut client_conn, e).await;
             return;
         }
     };
@@ -231,7 +231,7 @@ async fn handle_connection(mut client_conn: TcpStream, auth_settings: AuthSettin
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("Error encountered: {}. Closing connection.", e);
-            handle_server_reply_error(&mut client_conn, &e).await;
+            handle_server_reply_error(&mut client_conn, e).await;
             return;
         }
     };
